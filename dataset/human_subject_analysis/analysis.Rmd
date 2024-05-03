@@ -1,0 +1,790 @@
+---
+title: "Description Evaluation Study Analysis"
+# output: html_notebook
+output: rmarkdown::github_document
+---
+
+# Data Loading
+
+```{r load libraries, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(here)
+library(lme4)
+library(lmerTest)
+library(ggpubr)
+theme_set(theme_bw())
+```
+
+```{r load data, message=FALSE, warning=FALSE}
+
+df_import = read_csv("../data/data_chunk0-1_anon.csv") %>% 
+  bind_rows(read_csv("../data/data_chunk0-2_anon.csv")) %>% 
+  bind_rows(read_csv("../data/data_chunk0-3_anon.csv")) %>% 
+  bind_rows(read_csv("../data/data_chunk0-4_anon.csv")) %>% 
+  bind_rows(read_csv("../data/data_chunk0-5_anon.csv"))
+
+glimpse(df_import)
+
+```
+
+# Comments & Feedback
+
+```{r}
+unique(df_import$comments)
+```
+
+# General Study Statistics
+
+```{r study stats age, echo=TRUE, fig.height=6, fig.width=8, message=FALSE, warning=FALSE}
+
+# nrow(distinct(df_import, submission_id))
+
+df_import %>% 
+  distinct(submission_id, age) %>% 
+  # mutate(mean=mean(age, na.rm = TRUE),
+  #        median=median(age, na.rm = TRUE),
+  #        na=sum(is.na(age))) %>% 
+  ggplot(., aes(x=age)) +
+   geom_bar(stat="count",
+            fill="lightgray",
+            color="black") +
+    xlab("Age")
+```
+```{r study stats enjoyment, echo=TRUE, fig.height=4, fig.width=6, message=FALSE, warning=FALSE}
+
+df_import %>% 
+  distinct(submission_id, enjoyment) %>% 
+  ggplot(., aes(x=enjoyment)) +
+   geom_bar(stat="count",
+            fill="lightgray",
+            color="black") +
+    xlab("Did you enjoy the study?")
+```
+
+```{r study stats hitcorrect, echo=TRUE, fig.height=4, fig.width=8, message=FALSE, warning=FALSE}
+
+df_import %>% 
+  distinct(submission_id, HitCorrect) %>% 
+  ggplot(., aes(x=as.character(HitCorrect))) +
+   geom_bar(stat="count",
+            fill="lightgray",
+            color="black") +
+    xlab("Did you do the study correctly?")
+
+```
+
+```{r study stats languages, echo=TRUE, fig.height=4.5, fig.width=7.5, message=FALSE, warning=FALSE}
+
+df_import %>% 
+  distinct(submission_id, languages) %>% 
+  mutate(languages = str_to_lower(languages)) %>% 
+  # mutate(incl_eng = str_detect(languages, "eng")) %>% 
+  # mutate(incl_eng_sum = sum(incl_eng, na.rm=TRUE)/n()) %>% 
+  # mutate(na=sum(is.na(languages))) %>% 
+  # view()
+  ggplot(., aes(x=languages)) +
+    geom_bar(stat="count",
+            fill="lightgray",
+            color="black") +
+    theme(axis.text = element_text(angle=40, hjust=1)) +
+    xlab("Native Language")
+```
+
+```{r study stats timespent, echo=TRUE, fig.height=4.5, fig.width=7, message=FALSE, warning=FALSE}
+
+df_import %>% 
+  distinct(submission_id, timeSpent) %>% 
+  ggplot(., aes(x=timeSpent)) +
+   geom_histogram(bins=10,
+            fill="lightgray",
+            color="black") +
+    xlab("Time Spent in Minutes")
+```
+
+# Main Data Cleaning
+
+```{r}
+df_ratings_extended = df_import %>% 
+  select(q1_sliderval, q2_sliderval, q3_sliderval, q4_sliderval, q5_sliderval, q6_sliderval,
+         q1_type, q2_type, q3_type, q4_type, q5_type, q6_type,
+         description, img_id, caption, trial_number,
+         mistake_checkbox, mistake_comments, discr_checkbox, discr_comments, 
+         page_title, page_context, section_title, section_context, 
+         HitCorrect, timeSpent, submission_id) %>% 
+  mutate(overall = q6_sliderval) %>%
+  mutate(reconstructivity = case_when(
+    q1_type == "reconstructive" ~ q1_sliderval,
+    q2_type == "reconstructive" ~ q2_sliderval,
+    q3_type == "reconstructive" ~ q3_sliderval,
+    q4_type == "reconstructive" ~ q4_sliderval,
+    q5_type == "reconstructive" ~ q5_sliderval,
+    TRUE ~ "FIRE"
+  )) %>% 
+  mutate(allrelevant = case_when(
+    q1_type == "all_relevant" ~ q1_sliderval,
+    q2_type == "all_relevant" ~ q2_sliderval,
+    q3_type == "all_relevant" ~ q3_sliderval,
+    q4_type == "all_relevant" ~ q4_sliderval,
+    q5_type == "all_relevant" ~ q5_sliderval,
+    TRUE ~ "FIRE"
+  )) %>% 
+  mutate(noirrelevant = case_when(
+    q1_type == "no_irrelevant" ~ q1_sliderval,
+    q2_type == "no_irrelevant" ~ q2_sliderval,
+    q3_type == "no_irrelevant" ~ q3_sliderval,
+    q4_type == "no_irrelevant" ~ q4_sliderval,
+    q5_type == "no_irrelevant" ~ q5_sliderval,
+    TRUE ~ "FIRE"
+  )) %>% 
+  mutate(imagefit = case_when(
+    q1_type == "image_fit" ~ q1_sliderval,
+    q2_type == "image_fit" ~ q2_sliderval,
+    q3_type == "image_fit" ~ q3_sliderval,
+    q4_type == "image_fit" ~ q4_sliderval,
+    q5_type == "image_fit" ~ q5_sliderval,
+    TRUE ~ "FIRE"
+  )) %>% 
+  mutate(addedinfo = case_when(
+    q1_type == "added_info" ~ q1_sliderval,
+    q2_type == "added_info" ~ q2_sliderval,
+    q3_type == "added_info" ~ q3_sliderval,
+    q4_type == "added_info" ~ q4_sliderval,
+    q5_type == "added_info" ~ q5_sliderval,
+    TRUE ~ "FIRE"
+  )) %>% 
+  select(-q1_sliderval, -q2_sliderval, -q3_sliderval, -q4_sliderval, -q5_sliderval, -q6_sliderval,
+         -q1_type, -q2_type, -q3_type, -q4_type, -q5_type, -q6_type) %>%
+  mutate(reconstructivity = str_sub(reconstructivity, start=3, end=3)) %>% 
+  rename(reconstructivity_preimg = reconstructivity) %>%
+  separate(allrelevant, c("allrelevant_preimg", "allrelevant_postimg"), sep="', '") %>% 
+  separate(noirrelevant, c("noirrelevant_preimg", "noirrelevant_postimg"), sep="', '") %>%
+  separate(imagefit, c("imagefit_preimg", "imagefit_postimg"), sep="', '") %>%
+  separate(addedinfo, c("addedinfo_preimg", "addedinfo_postimg"), sep="', '") %>%
+  separate(overall, c("overall_preimg", "overall_postimg"), sep="', '") %>%
+  mutate(across(.cols = c(overall_preimg, overall_postimg, reconstructivity_preimg, allrelevant_preimg, allrelevant_postimg, noirrelevant_preimg, noirrelevant_postimg, imagefit_preimg, imagefit_postimg, addedinfo_preimg, addedinfo_postimg), 
+                .fns = ~ as.numeric(str_replace_all(., "(\\[|\\]|')", "")))) %>% 
+  mutate(descr_caption_copy = ifelse(is.na(caption), FALSE, description == caption))
+  
+glimpse(df_ratings_extended)
+```
+
+
+```{r data exclusions and heuristic}
+
+df_passed_attcheck = df_ratings_extended %>% 
+  filter(descr_caption_copy) %>% 
+  mutate(attcheck_passed = addedinfo_preimg < 3 & addedinfo_postimg < 3) %>% 
+  filter(attcheck_passed) %>% 
+  select(submission_id)
+
+df_main = df_ratings_extended %>% 
+  filter(# HitCorrect == 1,
+         # timeSpent >= 5,
+         submission_id %in% df_passed_attcheck$submission_id) %>% 
+  mutate(descr_length = str_length(description))
+
+df_final = df_main %>% 
+  group_by(description) %>% 
+  mutate(nr_of_annotations = n()) %>% 
+  ungroup() %>% 
+  filter(nr_of_annotations > 2)
+
+```
+
+
+# Results
+
+## Image Correlations
+
+```{r corr, echo=TRUE, fig.height=8, fig.width=8, message=FALSE, warning=FALSE}
+library("corrplot")
+
+# df_cor_preimg = df_final %>% 
+#   select(allrelevant_preimg, reconstructivity_preimg, noirrelevant_preimg, imagefit_preimg, addedinfo_preimg, overall_preimg) %>% 
+#   cor(round(., 2))
+# df_cor_preimg %>% 
+#   corrplot(., method="number", type="upper", tl.col="black", tl.srt=45)
+
+df_cor_postimg = df_final %>% 
+  select(allrelevant_postimg, noirrelevant_postimg, imagefit_postimg, addedinfo_postimg, overall_postimg) %>% 
+  cor(round(., 2))
+df_cor_postimg %>% 
+  corrplot(., method="number", type="upper", tl.col="black", tl.srt=45)
+
+# cor(df_final$allrelevant_preimg, df_final$allrelevant_postimg)
+# cor(df_final$noirrelevant_preimg, df_final$noirrelevant_postimg)
+# cor(df_final$imagefit_preimg, df_final$imagefit_postimg)
+# cor(df_final$addedinfo_preimg, df_final$addedinfo_postimg)
+# cor(df_final$overall_preimg, df_final$overall_postimg)
+```
+
+## Length Correlation
+
+```{r length corr, echo=TRUE, fig.height=5, fig.width=9, message=FALSE, warning=FALSE}
+
+df_final %>% 
+  select(submission_id, trial_number, allrelevant_preimg, allrelevant_postimg, noirrelevant_preimg, noirrelevant_postimg, imagefit_preimg, imagefit_postimg, addedinfo_preimg, addedinfo_postimg, overall_preimg, overall_postimg, reconstructivity_preimg, HitCorrect, timeSpent, description, descr_length) %>% 
+  gather(question_window, value, -submission_id, -trial_number, -HitCorrect, -timeSpent, -description, -descr_length) %>% 
+  separate(question_window, c("question", "window"), sep="_") %>% 
+  mutate(question = case_when(
+    question == "addedinfo" ~ "added info",
+    question == "allrelevant" ~ "relevance",
+    question == "noirrelevant" ~ "irrelevance",
+    question == "imagefit" ~ "image fit",
+    question == "overall" ~ "overall",
+    question == "reconstructivity" ~ "imaginability",
+    TRUE ~ "FIRE"
+  )) %>% 
+  mutate(question = fct_relevel(question, c("overall", "imaginability", "relevance", "irrelevance", "added info", "image fit"))) %>% 
+  mutate(value = as.numeric(value)) %>% 
+  mutate(window = fct_relevel(window, c("preimg", "postimg"))) %>% 
+  ggplot(., aes(x=descr_length, y=value, color=window)) +
+    facet_wrap(~question) +
+    geom_point(alpha=0.2, position=position_jitter(width=0, height=0.3)) +
+    geom_smooth(method="lm", alpha=0.2) +
+    stat_cor(method = "pearson", label.y.npc=0.2) +
+    coord_cartesian(ylim=c(1,5)) +
+    theme(strip.background = element_rect(fill="white")) +
+    scale_color_manual(values = c("#EE7733", "#33BBEE"), name = "Image was", labels = c("not shown", "shown")) +
+    xlab("Description length in characters") +
+    ylab("Rating")
+```
+
+
+## Special Case: Identical Descriptions and Captions
+
+```{r identical, echo=TRUE, fig.height=5, fig.width=9, message=TRUE, warning=FALSE, paged.print=FALSE}
+
+df_final %>% 
+  select(submission_id, trial_number, allrelevant_preimg, allrelevant_postimg, noirrelevant_preimg, noirrelevant_postimg, imagefit_preimg, imagefit_postimg, addedinfo_preimg, addedinfo_postimg, overall_preimg, overall_postimg, reconstructivity_preimg, HitCorrect, timeSpent, description, descr_caption_copy) %>% 
+  gather(question_window, value, -submission_id, -trial_number, -HitCorrect, -timeSpent, -description, -descr_caption_copy) %>% 
+  separate(question_window, c("question", "window"), sep="_") %>% 
+  mutate(question = case_when(
+    question == "addedinfo" ~ "added info",
+    question == "allrelevant" ~ "relevance",
+    question == "noirrelevant" ~ "irrelevance",
+    question == "imagefit" ~ "image fit",
+    question == "overall" ~ "overall",
+    question == "reconstructivity" ~ "imaginability",
+    TRUE ~ "FIRE"
+  )) %>% 
+  mutate(question = fct_relevel(question, c("overall", "imaginability", "relevance", "irrelevance", "added info", "image fit"))) %>% 
+  mutate(value = as.numeric(value)) %>% 
+  mutate(window = fct_relevel(window, c("preimg", "postimg"))) %>% 
+  mutate(descr_caption_copy = ifelse(descr_caption_copy, "identical", "distinct")) %>% 
+  ggplot(., aes(x=descr_caption_copy, y=value, color=window)) +
+    facet_wrap(~question) +
+    geom_point(position=position_jitter(width=0.4, height=0.4), alpha=0.1) +
+    stat_summary(fun = "mean", 
+                 position = position_dodge(0.7),
+                 size = 4,
+                 geom = "point") +
+    stat_summary(fun.data = "mean_cl_boot",
+                 geom = "errorbar",
+                 position = position_dodge(0.7),
+                 size = .4,
+                 width = 0.3) +
+    theme(strip.background = element_rect(fill="white")) +
+    scale_color_manual(values = c("#EE7733", "#33BBEE"), name = "Image was", labels = c("not shown", "shown")) +
+    xlab("Description and caption are ...") +
+    ylab("Rating")
+
+df_captiondescr_dupl = df_final %>% 
+  select(submission_id, trial_number, allrelevant_preimg, allrelevant_postimg, noirrelevant_preimg, noirrelevant_postimg, imagefit_preimg, imagefit_postimg, addedinfo_preimg, addedinfo_postimg, overall_preimg, overall_postimg, reconstructivity_preimg, HitCorrect, timeSpent, description, descr_caption_copy) %>% 
+  gather(question_window, value, -submission_id, -trial_number, -HitCorrect, -timeSpent, -description, -descr_caption_copy) %>% 
+  separate(question_window, c("question", "window"), sep="_") %>% 
+  mutate(value = as.numeric(value)) %>% 
+  mutate(window = fct_relevel(window, c("preimg", "postimg"))) %>% 
+  filter(question == "overall",
+         window == "postimg")
+
+t.test(filter(df_captiondescr_dupl, descr_caption_copy)$value,filter(df_captiondescr_dupl, !descr_caption_copy)$value)
+  
+```
+## Dataset Statistics
+
+```{r}
+print(paste("Number of unique annotations:", nrow(df_final)))
+print(paste("Number of unique images/descriptions:", nrow(distinct(df_final, img_id, description))))
+print(paste("Avg number of annotations per image/description:", nrow(df_final)/nrow(distinct(df_final, img_id, description))))
+```
+
+## Faulty Descriptions
+
+```{r faulty, echo=TRUE, message=TRUE, warning=FALSE, paged.print=FALSE}
+  
+# df_final %>% 
+#   select(img_id, mistake_checkbox, mistake_comments, description, caption) %>% 
+#   group_by(img_id) %>% 
+#   mutate(potentially_faulty = sum(mistake_checkbox)/n()) %>% 
+#   ungroup() %>% 
+#   filter(potentially_faulty > 0) %>% 
+#   view()
+
+print("For 25 images (12% of all images) at least one annotator reported that the description contains potentially wrong information. For 6 of those images (3% of all images), more than half of the annotators noted potentially wrong information.")
+print("Participants note potential mistakes in the image-text alignment (e.g., 'The aircraft can be seen in the bottom left, not the bottom right of the image.', 'This is not a statue'), misspellings (e.g., '\"Photo\" is spelled incorrectly'), contextual misalignment of the image/description and the rest of the article (e.g., 'The image isn't relevant to the article; it shows Cuba and the surrounding area.').")
+print("Images with potentially faulty descriptions are rated lower on average in the post-image but not pre-image condition, suggesting that most of those judgments are based on image-text alignment issues that can only be verified based on the image.")
+```
+
+```{r faulty test, echo=TRUE, message=TRUE, warning=FALSE}
+df_faulty_bin = df_final %>% 
+  select(img_id, mistake_checkbox, overall_postimg) %>% 
+  group_by(img_id) %>% 
+  mutate(potentially_faulty = sum(mistake_checkbox)/n()) %>% 
+  ungroup() %>% 
+  mutate(potentially_faulty_bin = potentially_faulty > 0)
+
+t.test(filter(df_faulty_bin, potentially_faulty_bin)$overall_postimg,filter(df_faulty_bin, !potentially_faulty_bin)$overall_postimg)
+```
+
+## Rating Density Distribution (Figure 1)
+
+```{r density, echo=TRUE, fig.height=3, fig.width=5, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+df_final %>% 
+  select(img_id, allrelevant_postimg, noirrelevant_postimg, imagefit_postimg, addedinfo_postimg, overall_postimg, 
+         reconstructivity_preimg, description) %>% 
+  gather(question, rating, -img_id, -description) %>% 
+  group_by(question, img_id, description) %>% 
+  summarize(avg_rating = mean(rating)) %>% 
+  ungroup() %>%
+  mutate(question = as.character(str_replace_all(question, "\\_.*", "")),
+         question = case_when(
+           question == "overall" ~ "Overall",
+           question == "reconstructivity" ~ "Imaginability",
+           question == "allrelevant" ~ "Relevance",
+           question == "noirrelevant" ~ "Irrelevance",
+           question == "imagefit" ~ "Image fit",
+           question == "addedinfo" ~ "Added info",
+           TRUE ~ "FIRE"
+         ),
+         Question = fct_relevel(question, c("Overall", "Imaginability", "Relevance", "Irrelevance", "Added info", "Image fit"))) %>% 
+  ggplot(., aes(x=avg_rating, color=Question, fill=Question)) +
+    # geom_histogram(bins = 5)
+    geom_density(alpha=0.1, size=1.5) +
+    theme(legend.position = "right") +
+    theme(legend.title=element_blank(),
+          legend.box.margin=margin(0,0,-9,0)) +
+    scale_fill_manual(values=c("#DC050C", "#7BAFDE", "#CAACCB", "#882E72", "#CAE0AB", "#F4A736")) +
+    scale_color_manual(values=c("#DC050C", "#7BAFDE", "#CAACCB", "#882E72", "#CAE0AB", "#F4A736")) +
+    xlab("Average Description Rating\n(sighted annotators)") +
+    ylab("Density")
+
+# ggsave("avg_rating_distribution.png", height=2.8, width=5)
+  
+
+```
+
+## Interannotator Correlations
+
+```{r}
+df_theorupperlimit = df_final %>% 
+  select(img_id, submission_id, allrelevant_postimg, noirrelevant_postimg, overall_postimg, allrelevant_preimg, noirrelevant_preimg, overall_preimg, reconstructivity_preimg) %>% 
+  gather(question, rating, -img_id, -submission_id) %>% 
+  group_by(question, img_id) %>% 
+  mutate(avg_rating = mean(rating)) %>% 
+  # mutate(avg_rating = round(avg_rating, digits=0)) %>% 
+  ungroup() 
+  # glimpse()
+
+df_theorupperlimit %>% 
+  ggplot(., aes(x=rating, y=avg_rating)) +
+    facet_wrap(~question) +
+    geom_point(position=position_jitter(width=0.1, height=0.3)) +
+    geom_smooth(method="lm", alpha=0.2) +
+    stat_cor(method = "pearson", label.y.npc=0.2)
+
+df_theorupperlimit %>% 
+  group_by(question) %>% 
+  summarize(cor_val = cor(rating, avg_rating, method="pearson", use = "complete.obs")) %>% 
+  ungroup() %>% 
+  write_csv("../data/human_corr_theorupperlimit.csv")
+
+df_random_sample = df_final %>%
+  select(img_id, allrelevant_postimg, noirrelevant_postimg, overall_postimg, allrelevant_preimg, noirrelevant_preimg, overall_preimg, reconstructivity_preimg) %>%
+  sample_n(768, replace=TRUE) %>%
+  gather(question, rating, -img_id) %>%
+  group_by(question, img_id) %>%
+  summarize(avg_rating = mean(rating)) %>%
+  ungroup()
+
+df_sampledupperlimit = df_final %>%
+  select(img_id, allrelevant_postimg, noirrelevant_postimg, overall_postimg, allrelevant_preimg, noirrelevant_preimg, overall_preimg, reconstructivity_preimg) %>%
+  gather(question, rating, -img_id) %>%
+  # group_by(question, img_id) %>%
+  # summarize(avg_rating_orig = mean(rating)) %>%
+  # ungroup() %>%
+  left_join(df_random_sample)
+
+df_sampledupperlimit %>%
+  ggplot(., aes(x=rating, y=avg_rating)) +
+    facet_wrap(~question) +
+    geom_point(position=position_jitter(width=0.1, height=0.3)) +
+    geom_smooth(method="lm", alpha=0.2) +
+    stat_cor(method = "pearson", label.y.npc=0.2)
+
+df_sampledupperlimit %>% 
+  group_by(question) %>% 
+  summarize(cor_val = cor(rating, avg_rating, method="pearson", use = "complete.obs")) %>% 
+  ungroup() %>% 
+  write_csv("../data/human_corr_sampledupperlimit.csv")
+```
+
+
+```{r interann corr random sample, echo=TRUE}
+
+df_sample_prep = df_final %>% 
+  select(img_id,
+         allrelevant_postimg, noirrelevant_postimg, overall_postimg, allrelevant_preimg, noirrelevant_preimg, overall_preimg, reconstructivity_preimg) %>%
+  rowid_to_column("index")
+
+sample_data <- function(sample_id) { # create a function with the name my_function
+  df_sample = df_sample_prep %>% 
+    group_by(img_id) %>% 
+    sample_n(2) %>% 
+    ungroup() %>% 
+    gather(question_type, comp_rating, -img_id, -index)
+  
+  df_sample_avg = df_sample %>% 
+    group_by(img_id, question_type) %>% 
+    summarize(comp_rating=mean(comp_rating)) %>% 
+    ungroup()
+  
+  df_sample_prep %>% 
+    filter(!(index %in% df_sample$index)) %>% 
+    select(-index) %>% 
+    gather(question_type, rating, -img_id) %>%
+    # filter(question_type == "overall_postimg") %>%
+    # nrow()
+    group_by(img_id, question_type) %>% 
+    summarize(rating=mean(rating)) %>% 
+    ungroup() %>% 
+    left_join(df_sample_avg) %>% 
+    mutate(sample_id = sample_id)
+}
+
+# nrow(filter(df_sample, question_type == "overall_postimg"))
+
+df_cv_sample = sample_data(1) %>% 
+  rbind(sample_data(2)) %>%
+  rbind(sample_data(3)) %>%
+  rbind(sample_data(4)) %>%
+  rbind(sample_data(5)) %>%
+  rbind(sample_data(6)) %>%
+  rbind(sample_data(7)) %>%
+  rbind(sample_data(8)) %>%
+  rbind(sample_data(9)) %>%
+  rbind(sample_data(10)) %>%
+  rbind(sample_data(11)) %>%
+  rbind(sample_data(12)) %>%
+  rbind(sample_data(13)) %>%
+  rbind(sample_data(14)) %>%
+  rbind(sample_data(15)) %>%
+  rbind(sample_data(16)) %>%
+  rbind(sample_data(17)) %>%
+  rbind(sample_data(18)) %>%
+  rbind(sample_data(19)) %>%
+  rbind(sample_data(20)) %>%
+  rbind(sample_data(21)) %>%
+  rbind(sample_data(22)) %>%
+  rbind(sample_data(23)) %>%
+  rbind(sample_data(24)) %>%
+  rbind(sample_data(25)) %>%
+  rbind(sample_data(26)) %>%
+  rbind(sample_data(27)) %>%
+  rbind(sample_data(28)) %>%
+  rbind(sample_data(29)) %>%
+  rbind(sample_data(30)) %>%
+  rbind(sample_data(31)) %>%
+  rbind(sample_data(32)) %>%
+  rbind(sample_data(33)) %>%
+  rbind(sample_data(34)) %>%
+  rbind(sample_data(35)) %>%
+  rbind(sample_data(36)) %>%
+  rbind(sample_data(37)) %>%
+  rbind(sample_data(38)) %>%
+  rbind(sample_data(39)) %>%
+  group_by(question_type, sample_id) %>% 
+  mutate(cor_val = cor(rating, comp_rating, method="pearson", use = "complete.obs")) %>% 
+  ungroup() %>% 
+  distinct(question_type, sample_id, cor_val)
+
+df_cv_sample %>% 
+  ggplot(., aes(x=reorder(question_type, -cor_val), y=cor_val)) +
+    geom_point(alpha=0.2) +
+    theme(axis.text = element_text(angle=40, hjust=1)) +
+    stat_summary(fun = "mean", 
+                 size = 4,
+                 geom = "point",
+                 color = "blue") +
+    stat_summary(fun.data = "mean_cl_boot",
+                 geom = "errorbar",
+                 size = .4,
+                 width = 0.3)
+
+df_cv_sample %>% 
+  write_csv("../data/human_corr_estimates.csv")
+```
+
+```{r interann corr, echo=TRUE}
+
+df_cv_prep = df_final %>% 
+  arrange(img_id) %>%
+  group_by(img_id) %>% 
+  mutate(ann_count = row_number()) %>%
+  ungroup() %>% 
+  select(img_id, ann_count,
+         allrelevant_postimg, noirrelevant_postimg, imagefit_postimg, addedinfo_postimg, overall_postimg, allrelevant_preimg, noirrelevant_preimg, imagefit_preimg, addedinfo_preimg, overall_preimg, reconstructivity_preimg) %>% 
+  gather(question_type, rating, -img_id, -ann_count)
+
+df_cv1 = df_cv_prep %>% 
+  filter(ann_count == 1) %>% 
+  select(-ann_count) %>% 
+  rename(comp1 = rating)
+
+df_cv2 = df_cv_prep %>% 
+  filter(ann_count == 2) %>% 
+  select(-ann_count) %>% 
+  rename(comp2 = rating)
+
+df_cv3 = df_cv_prep %>% 
+  filter(ann_count == 3) %>% 
+  select(-ann_count) %>% 
+  rename(comp3 = rating)
+
+df_cv_prep %>%
+  left_join(df_cv1) %>% 
+  left_join(df_cv2) %>% 
+  left_join(df_cv3) %>% 
+  gather(cv_cond, comp_rating, 
+         comp1, comp2, comp3) %>% 
+  ggplot(., aes(x=rating, y=comp_rating, color=cv_cond)) +
+    facet_wrap(~question_type) +
+    geom_point(position=position_jitter(width=0.3, height=0.3)) +
+    geom_smooth(method="lm", alpha=0.2) +
+    stat_cor(method = "pearson", label.y.npc=0.2)
+  
+df_cv_results = df_cv_prep %>%
+  left_join(df_cv1) %>% 
+  left_join(df_cv2) %>% 
+  left_join(df_cv3) %>% 
+  gather(cv_cond, comp_rating, 
+         comp1, comp2, comp3) %>% 
+  group_by(question_type, cv_cond) %>% 
+  mutate(cor_val = cor(rating, comp_rating, method="pearson", use = "complete.obs")) %>% 
+  ungroup() %>% 
+  distinct(question_type, cv_cond, cor_val) %>% 
+  write_csv("../data/human_corr_estimates.csv")
+  # ggplot(., aes(x=question_type, y=cor_val)) +
+  #   geom_point()
+```
+
+
+## Qualitative Examples
+
+```{r qual examples, echo=TRUE}
+# df_final %>% 
+#   select(img_id, allrelevant_postimg, noirrelevant_postimg, imagefit_postimg, addedinfo_postimg, overall_postimg, overall_preimg,
+#          reconstructivity_preimg, description) %>% 
+#   gather(question, rating, -img_id, -description) %>% 
+#   group_by(question, img_id, description) %>% 
+#   summarize(avg_rating = mean(rating)) %>% 
+#   ungroup() %>% 
+#   filter(question == "overall_postimg") %>% 
+#   view()
+# 
+# df_final %>% 
+#   select(img_id, allrelevant_postimg, noirrelevant_postimg, imagefit_postimg, addedinfo_postimg, overall_postimg, overall_preimg,
+#          reconstructivity_preimg, description) %>% 
+#   gather(question, rating, -img_id, -description) %>% 
+#   group_by(question, img_id, description) %>% 
+#   summarize(avg_rating = mean(rating)) %>% 
+#   ungroup() %>% 
+#   filter(question == "overall_postimg" | question == "overall_preimg") %>%
+#   spread(question, avg_rating) %>% 
+#   mutate(prepostdiff = overall_postimg - overall_preimg) %>% 
+#   view()
+```
+
+# Data Augmentations
+
+```{r simple augmentations, echo=TRUE, message=FALSE, warning=FALSE}
+df_metric_gold = df_main %>% 
+  select(description, descr_caption_copy, submission_id, trial_number, 
+         img_id, caption, page_title, page_context, section_context, section_title,
+         allrelevant_preimg, allrelevant_postimg, 
+         noirrelevant_preimg, noirrelevant_postimg, 
+         imagefit_preimg, imagefit_postimg, 
+         addedinfo_preimg, addedinfo_postimg, 
+         overall_preimg, overall_postimg, 
+         reconstructivity_preimg) %>% 
+  group_by(description) %>% 
+  mutate(nr_of_annotations = n()) %>% 
+  ungroup() %>% 
+  rename(anon_worker_id = submission_id,
+         context = page_title,
+         q_relevance.preimg = allrelevant_preimg,
+         q_relevance.postimg = allrelevant_postimg, 
+         q_irrelevance.preimg = noirrelevant_preimg, 
+         q_irrelevance.postimg = noirrelevant_postimg, 
+         q_imgfit.preimg = imagefit_preimg, 
+         q_imgfit.postimg = imagefit_postimg, 
+         q_addedinfo.preimg = addedinfo_preimg, 
+         q_addedinfo.postimg = addedinfo_postimg, 
+         q_overall.preimg = overall_preimg, 
+         q_overall.postimg = overall_postimg, 
+         q_reconstructivity.preimg = reconstructivity_preimg) %>% 
+  # mutate(article_text = str_c(caption, page_context, section_title, section_context, sep = "\n")) %>% 
+  mutate(article_text = paste(caption, page_context, section_title, section_context, sep = "\n")) %>%
+  mutate(imgstem = str_replace(img_id, ".jpg", "")) %>% 
+  filter(nr_of_annotations > 2) %>% 
+  mutate(descr_original = description) %>% 
+  sample_frac() %>% 
+  group_by(img_id) %>% 
+  mutate(data_id = cur_group_id()) %>% 
+  ungroup() %>% 
+  mutate(split = ifelse(data_id < max(data_id)*0.8, "train", "test")) %>% 
+  select(-data_id)
+
+# include 80/20 split
+df_metric_shuffleddescr_train = df_metric_gold %>% 
+  filter(split == "train") %>% 
+  distinct(descr_original) %>% 
+  mutate(description = sample(descr_original)) %>% 
+  right_join(select(filter(df_metric_gold, split == "train"), -description))
+df_metric_shuffleddescr = df_metric_gold %>% 
+  filter(split == "test") %>% 
+  distinct(descr_original) %>% 
+  mutate(description = sample(descr_original)) %>% 
+  right_join(select(filter(df_metric_gold, split == "test"), -description)) %>% 
+  bind_rows(df_metric_shuffleddescr_train)
+
+df_metric_shuffledcontext_train = df_metric_gold %>% 
+  filter(split == "train") %>% 
+  distinct(descr_original, context, article_text, caption, section_context, page_context) %>% 
+  mutate(context = sample(context),
+         article_text = sample(article_text),
+         caption = sample(caption),
+         section_context = sample(section_context),
+         page_context = sample(page_context)) %>% 
+  right_join(select(filter(df_metric_gold, split == "train"), -context, -article_text, -caption, -section_context, -page_context))
+df_metric_shuffledcontext = df_metric_gold %>% 
+  filter(split == "test") %>% 
+  distinct(descr_original, context, article_text, caption, section_context, page_context) %>% 
+  mutate(context = sample(context),
+         article_text = sample(article_text),
+         caption = sample(caption),
+         section_context = sample(section_context),
+         page_context = sample(page_context)) %>% 
+  right_join(select(filter(df_metric_gold, split == "test"), -context, -article_text, -caption, -section_context, -page_context)) %>% 
+  bind_rows(df_metric_shuffledcontext_train)
+
+shuffle_words <- function(list_of_words) { 
+  return(paste(sample(list_of_words,length(list_of_words),replace=FALSE), collapse = " "))
+}
+
+
+df_metric_descr_wordshuffling_unique = df_metric_gold %>% 
+  mutate(description_byword = str_split(description, " ")) %>% 
+  distinct(description, description_byword, descr_original) %>% 
+  rowwise() %>% 
+  mutate(description_shuffled = shuffle_words(description_byword)) %>% 
+  select(-description_byword, -description) %>% 
+  rename(description = description_shuffled)
+df_metric_descr_wordshuffling = df_metric_gold %>% 
+  # rename(descr_original = description) %>% 
+  select(-description) %>% 
+  left_join(df_metric_descr_wordshuffling_unique)
+
+glimpse(df_metric_descr_wordshuffling)
+
+final_sentences = c("The elephant is the largest existing land animal.", 
+      "Cricket is a bat-and-ball game played between two teams of eleven players on a field", 
+      "A rose is either a woody perennial flowering plant of the genus Rosa or the flower it bears.", 
+      "The viola is a string instrument that is bowed, plucked, or played with varying techniques.",
+      "Python is a high-level, general-purpose programming language.",
+      "Onomatopoeia is the use or creation of a word that phonetically imitates, resembles, or suggests the sound that it describes.",
+      "Salt is a mineral composed primarily of sodium chloride.",
+      "Hypertension is a long-term medical condition in which the blood pressure in the arteries is persistently elevated.",
+      "Tail wagging is the behavior of the dog observed as its tail moves back and forth in the same plane.",
+      "A hand fan is any broad, flat surface that is waved back-and-forth to create an airflow.")
+
+df_metric_irrfinalsentence_unique = df_metric_gold %>% 
+  select(-description) %>% 
+  distinct(descr_original) %>% 
+  rowwise() %>% 
+  mutate(description = ifelse(
+    str_sub(descr_original,-1,-1)==".",
+       str_c(descr_original, sample(final_sentences)[1], sep = " "),
+       str_c(descr_original, sample(final_sentences)[1], sep = ". ")))
+df_metric_irrfinalsentence = df_metric_gold %>% 
+  select(-description) %>% 
+  left_join(df_metric_irrfinalsentence_unique)
+
+df_metric_repeatedsentence = df_metric_gold %>% 
+  mutate(description = ifelse(
+    str_sub(descr_original,-1,-1)==".",
+       str_c(descr_original, descr_original, sep = " "),
+       str_c(descr_original, descr_original, sep = ". ")))
+
+# write_csv(df_metric_gold, "df_metric_gold.csv")
+# write_csv(df_metric_shuffleddescr, "df_metric_shuffleddescr.csv")
+# write_csv(df_metric_shuffledcontext, "df_metric_shuffledcontext.csv")
+# write_csv(df_metric_descr_wordshuffling, "df_metric_descr_wordshuffling.csv")
+# write_csv(df_metric_irrfinalsentence, "df_metric_irrfinalsentence.csv")
+# write_csv(df_metric_repeatedsentence, "df_metric_repeatedsentence.csv")
+```
+
+```{r augmentations follow-ups, echo=TRUE, message=TRUE, warning=FALSE}
+# df_metric_gold_split = df_metric_gold %>% 
+#   distinct(imgstem, split) %>% 
+#   mutate(imgstem = as.double(imgstem))
+# 
+# df_frankenstein = read_csv("../data/model_input_data/df_metric_frankenstein_images.csv") %>% 
+#   select(-X1) %>% 
+#   left_join(df_metric_gold_split) %>% 
+#   write_csv("df_metric_frankenstein_images.csv")
+# 
+# df_gtp2contlong = read_csv("../data/model_input_data/df_metric_gpt2continuation_long.csv") %>% 
+#   select(-X1) %>% 
+#   left_join(df_metric_gold_split) %>% 
+#   write_csv("df_metric_gpt2continuation_long.csv")
+# 
+# df_gpt2contshort = read_csv("../data/model_input_data/df_metric_gpt2continuation_short.csv") %>% 
+#   select(-X1) %>% 
+#   left_join(df_metric_gold_split) %>% 
+#   write_csv("df_metric_gpt2continuation_short.csv")
+# 
+# df_modelerrors = read_csv("../data/model_input_data/df_metric_modelerrors_GPT4.csv") %>% 
+#   select(-X1) %>% 
+#   left_join(df_metric_gold_split) %>% 
+#   write_csv("df_metric_modelerrors_GPT4.csv")
+# 
+# df_propernames = read_csv("../data/model_input_data/df_metric_propernames_GPT4.csv") %>% 
+#   select(-X1) %>% 
+#   left_join(df_metric_gold_split) %>% 
+#   write_csv("df_metric_propernames_GPT4.csv")
+# 
+# pn_overview = df_propernames %>% 
+#   mutate(no_aug = ifelse(descr_original == description, "w/o augm", "w augm")) %>% 
+#   distinct(img_id, split, no_aug)
+# 
+# table(pn_overview$split, pn_overview$no_aug)
+# 
+# modelerrors_overview = df_modelerrors %>% 
+#   mutate(no_aug = ifelse(descr_original == description, "w/o augm", "w augm")) %>% 
+#   distinct(img_id, split, no_aug)
+# 
+# table(modelerrors_overview$split, modelerrors_overview$no_aug)
+
+```
+
+
+
+
+
+
+
+
+
+
