@@ -1,0 +1,237 @@
+---
+title: "gold_metric_analysis"
+output: html_document
+---
+
+# Data Setup
+
+```{r load libraries, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(lme4)
+library(lmerTest)
+library(ggpubr)
+theme_set(theme_bw())
+```
+
+```{r load data, message=FALSE, warning=FALSE, include=FALSE}
+import_all_model_files <- function(flnm) {
+  read_csv(flnm) %>% 
+    mutate(filename = str_replace(flnm, "/df_metric_gold.csv", "")) %>% 
+    mutate(filename = str_replace(filename, "metric_outputs/", ""))
+}
+
+# embedding-based metric csv files are slightly differently formatted than the log-likelihood-based csv files, so we have to treat them differently in analysis
+clean_embed_data <- function(data, model_name) {
+  data %>% 
+  distinct(img_id, filename, description, .keep_all=TRUE) %>% 
+  select(img_id, filename, description, clipscore, contextscore) %>% 
+  rename(embed_no_context = clipscore, 
+         embed_context = contextscore) %>% 
+  gather(score_variant, score, embed_no_context, embed_context) %>% 
+  mutate(score_variant = ifelse(str_detect(filename, "feature_extractor"),
+                                paste(score_variant, "_featureextractor", sep = ""),
+                                paste(score_variant, "_imagetextmatching", sep = ""))) %>% 
+  mutate(context_included = !str_detect(score_variant, "no_context"),
+         model_category = model_name,
+         score_category = "embed")
+}
+
+clean_logl_data <- function(data, model_name) {
+  data %>% 
+  distinct(img_id, filename, description, .keep_all=TRUE) %>% 
+  select(img_id, filename, description, 
+         text_if_good_reduce_diff, text_if_good_reduce, text_if_good_diff, text_if_good, 
+         good_if_text_reduce_diff, good_if_text_reduce, good_if_text_diff, good_if_text,
+         text_and_good_reduce_diff, text_and_good_reduce, text_and_good_diff, text_and_good) %>% 
+  gather(score_variant, score, 
+         text_if_good_reduce_diff, text_if_good_reduce, text_if_good_diff, text_if_good, 
+         good_if_text_reduce_diff, good_if_text_reduce, good_if_text_diff, good_if_text,
+         text_and_good_reduce_diff, text_and_good_reduce, text_and_good_diff, text_and_good) %>% 
+  mutate(context_included = !str_detect(score_variant, "no_context"),
+         model_category = case_when(
+           model_name == "BLIP" ~ ifelse(str_detect(filename, "instruct"), 
+                                         "InstructBLIP", 
+                                         "BLIP-2"),
+           TRUE ~ model_name),
+         score_category = "language")
+}
+
+df_blip_embed <-
+  list.dirs(path = "../metric_outputs/blip_embed", recursive = FALSE) %>% 
+  map_df(~import_all_model_files(paste(., "/df_metric_gold.csv", sep=""))) %>% 
+  clean_embed_data(., "BLIP-2")
+
+df_blip_language <-
+  list.dirs(path = "../metric_outputs/blip_language/", recursive = FALSE) %>% 
+  map_df(~import_all_model_files(paste(., "/df_metric_gold.csv", sep=""))) %>% 
+  clean_logl_data(., "BLIP")
+  
+df_clip <-
+  list.dirs(path = "../metric_outputs/clip/", recursive = FALSE) %>% 
+  map_df(~import_all_model_files(paste(., "/df_metric_gold.csv", sep=""))) %>% 
+  clean_embed_data(., "CLIP")
+
+df_flamingo_language <-
+  list.dirs(path = "../metric_outputs/flamingo_language/", recursive = FALSE) %>% 
+  map_df(~import_all_model_files(paste(., "/df_metric_gold.csv", sep=""))) %>% 
+  clean_logl_data(., "Flamingo")
+
+df_frozen_language <-
+  list.dirs(path = "../metric_outputs/frozen_language/", recursive = FALSE) %>% 
+  map_df(~import_all_model_files(paste(., "/df_metric_gold.csv", sep=""))) %>% 
+  clean_logl_data(., "Frozen")
+
+df_human_avg = read_csv("../dataset/data/model_input_data/df_metric_gold.csv") %>% 
+  gather(metric_name, human, starts_with("q_")) %>% 
+  group_by(img_id, metric_name) %>% 
+  summarize(human = mean(human)) %>% 
+  ungroup()
+
+df_full = df_blip_embed %>% 
+  rbind(df_blip_language) %>% 
+  rbind(df_clip) %>% 
+  rbind(df_flamingo_language) %>% 
+  rbind(df_frozen_language) %>% 
+  left_join(df_human_avg) %>% 
+  mutate(unique_metric_id = paste(filename, score_variant, context_included))
+
+df_human_corr_estimates = read_csv("../dataset/data/human_corr_sampledupperlimit.csv")
+# df_human_corr_estimates = read_csv("../dataset/data/human_corr_theorupperlimit.csv")
+
+```
+
+
+# Models with the best human correlations (Figure 2)
+
+```{r}
+
+# format max expected correlations for humans
+df_human_corr_bound = df_human_corr_estimates %>% 
+  rename(question_type = question) %>% 
+  mutate(metric_cat = case_when(
+    str_detect(question_type, "allrelevant") ~ "Relevance",
+    str_detect(question_type, "noirrelevant") ~ "Irrelevance",
+    str_detect(question_type, "overall") ~ "Overall",
+    str_detect(question_type, "reconstructivity") ~ "Imaginability",
+    TRUE ~ "other"
+  )) %>% 
+  mutate(metric_time = ifelse(str_detect(question_type, "pre"), "pre-image rating", "post-image rating")) %>% 
+  filter(metric_cat != "other") %>% 
+  select(metric_cat, metric_time, cor_val)  %>% 
+  mutate(metric_cat = factor(metric_cat, levels=c("Overall", "Imaginability", "Relevance", "Irrelevance")))
+
+# determine metrics with best human overall post-image correlation
+best_metrics = df_full %>% 
+  filter(metric_name == "q_overall.postimg") %>% 
+  mutate(orig_clipscore = str_detect(unique_metric_id, "ViTB32_openai embed_no_context")) %>% 
+  filter(orig_clipscore | context_included) %>% 
+  filter(ifelse(score_category == "language", score_variant == "text_if_good_reduce", TRUE)) %>% 
+  group_by(metric_name, unique_metric_id, context_included) %>% 
+  mutate(correlation = cor(human, score, method="pearson", use = "complete.obs"),
+         corr_sign = cor.test(human, score, method="pearson", use = "complete.obs")[3]) %>% 
+  ungroup() %>% 
+  mutate(corr_sign_bin = ifelse(corr_sign < 0.01, "***", "")) %>% 
+  distinct(unique_metric_id, correlation, model_category, context_included, score_category, score_variant, corr_sign_bin, orig_clipscore) %>%
+  group_by(model_category, score_category) %>% 
+  mutate(max_val = max(correlation)) %>% 
+  ungroup() %>% 
+  filter(max_val == correlation | orig_clipscore) %>% 
+  distinct(unique_metric_id)
+
+# plot correlations
+df_full %>% 
+    filter(unique_metric_id %in% best_metrics$unique_metric_id) %>% 
+    group_by(unique_metric_id, metric_name) %>% 
+    mutate(correlation = cor(human, score, method="pearson", use = "complete.obs"),
+           corr_sign = cor.test(human, score, method="pearson", use = "complete.obs")[3]) %>% 
+    ungroup() %>% 
+    mutate(corr_sign_bin = ifelse(corr_sign < 0.01, "*", "")) %>%
+    mutate(metric_cat = case_when(
+      str_detect(metric_name, "overall") ~ "Overall",
+      str_detect(metric_name, "reconstructivity") ~ "Imaginability",
+      str_detect(metric_name, "irrelevance") ~ "Irrelevance",
+      str_detect(metric_name, "relevance") ~ "Relevance",
+      TRUE ~ "other"
+    )) %>% 
+    mutate(metric_time = ifelse(str_detect(metric_name, "pre"), "pre-image rating", "post-image rating")) %>% 
+    mutate(metric_cat = factor(metric_cat, levels=c("Overall", "Imaginability", "Relevance", "Irrelevance"))) %>% 
+    filter(!is.na(metric_cat)) %>% 
+    mutate(metric_name = factor(metric_name, levels=c("q_overall.postimg", "q_overall.preimg", "q_reconstructivity.preimg", "q_relevance.preimg", "q_relevance.postimg", "q_irrelevance.preimg", "q_irrelevance.postimg"))) %>% 
+  mutate(metric_time = fct_relevel(metric_time, "pre-image rating", "post-image rating")) %>%
+  distinct(unique_metric_id, correlation, metric_name, model_category, metric_cat, metric_time, corr_sign_bin, score_category) %>% 
+  mutate(nice_category_name = case_when(
+    str_detect(unique_metric_id, "ViTB32_openai embed_no_context") ~ "Orig. CLIPScore (Sim)",
+    str_detect(unique_metric_id, "embed") ~ paste(model_category, "(Sim)", sep=" "),
+    str_detect(unique_metric_id, "language") ~ paste(model_category, "(LogL)", sep=" "),
+    TRUE ~ model_category
+  )) %>% 
+  mutate(nice_category_name = fct_relevel(nice_category_name,
+    "Orig. CLIPScore (Sim)", "CLIP (Sim)", "BLIP-2 (Sim)", "InstructBLIP (LogL)", "Flamingo (LogL)", "Frozen (LogL)", "BLIP-2 (LogL)")) %>% 
+    distinct(nice_category_name, correlation, metric_time, metric_cat, score_category) %>%
+    ggplot(., aes(x=nice_category_name, y=correlation, color=metric_time, shape=score_category)) +
+      facet_wrap(~metric_cat, scales = "free_x", nrow=1) +
+      geom_hline(yintercept=0, color = "gray") +
+      geom_hline(aes(yintercept = cor_val, color=metric_time), df_human_corr_bound, linetype="dashed") +
+      geom_point(alpha=0.2,
+                   position = position_dodge(width=0.5)) +
+      stat_summary(fun = "mean", 
+                   size = 3,
+                   geom = "point",
+                   position = position_dodge(width=0.5)) +
+      stat_summary(fun.data = "mean_cl_boot",
+                   geom = "errorbar",
+                   size = .3,
+                   width = 0.2,
+                   position = position_dodge(width=0.5)) +
+      scale_color_manual(name = "", 
+                         labels = c("Pre-image rating", 
+                                    "Post-image rating", 
+                                    "Similarity", 
+                                    "LogLikelihood"),
+                         values = c("lightblue", "darkblue", "lightblue", "darkblue")) +
+      scale_shape_manual(name = "",
+                         labels = c("Similarity",
+                                    "LogLikelihood",
+                                    "Pre-image rating",
+                                    "Post-image rating"),
+                         values = c(19, 17, 19, 17)) +
+      theme(axis.text.x = element_text(angle=40, hjust=1)) +
+      theme(legend.position = "top") +
+      theme(strip.background = element_blank(),
+            legend.box.margin=margin(0,0,-12,0),
+            axis.title = element_text(size=13),
+            axis.text.y = element_text(size=11),
+            legend.text = element_text(size=11),
+            strip.text = element_text(size=13)) +
+      scale_y_continuous(breaks = seq(-0.4, 0.65, by = 0.2)) +
+      xlab("Metric Variant") +
+      ylab("Correlation with\nHuman Annotations")
+
+# ggsave("human_corr_perquestion.png", width = 8, height = 4)
+```
+
+# Correlations across the best metrics (Figure A.5)
+
+```{r}
+library("corrplot")
+
+df_corr = df_full %>% 
+  filter(metric_name == "q_overall.postimg") %>%
+  filter(unique_metric_id %in% best_metrics$unique_metric_id) %>%
+  mutate(nice_category_name = case_when(
+    str_detect(unique_metric_id, "ViTB32_openai embed_no_context") ~ "Orig. CLIPScore (Sim)",
+    str_detect(unique_metric_id, "embed") ~ paste(model_category, "(Sim)", sep=" "),
+    str_detect(unique_metric_id, "language") ~ paste(model_category, "(LogL)", sep=" "),
+    TRUE ~ model_category
+  )) %>% 
+  select(img_id, nice_category_name, score) %>% 
+  spread(nice_category_name, score) %>% 
+  select(-img_id) %>% 
+  cor(round(., 2))
+
+df_corr %>% 
+  corrplot(., method="color", order="AOE", type="upper", tl.col="black", tl.srt=45)
+  
+```
+
+

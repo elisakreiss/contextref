@@ -1,0 +1,278 @@
+---
+title: "new_augm_analysis"
+output: html_document
+---
+
+# Data Setup
+
+```{r load libraries, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(here)
+library(lme4)
+library(lmerTest)
+library(ggpubr)
+theme_set(theme_bw())
+```
+
+```{r load data, message=FALSE, warning=FALSE, include=FALSE}
+import_all_augm_files <- function(flnm) {
+    read_csv(flnm) %>% 
+        mutate(filename = flnm) %>% 
+        mutate(filename = str_replace(flnm, ".*/df_metric_", "df_metric_"))
+}
+
+# embedding-based metric csv files are slightly differently formatted than the log-likelihood-based csv files, so we have to treat them differently in analysis
+clean_embed_data <- function(data, model_name) {
+  data %>% 
+  distinct(img_id, filename, description, .keep_all=TRUE) %>% 
+  select(img_id, filename, description, descr_original, contextscore) %>% 
+  rename(score = contextscore) %>% 
+  mutate(model_category = model_name,
+         score_category = "embed") %>% 
+  mutate(unique_metric_id = paste(filename))
+}
+
+clean_logl_data <- function(data, model_name) {
+  data %>% 
+  mutate(score = case_when(
+    str_detect(filename, "gold") ~ text_if_good_reduce,
+    TRUE ~ p_text_if_good_reduce
+  )) %>% 
+  # rename(score = p_text_if_good_reduce) %>% 
+  distinct(img_id, filename, description, .keep_all=TRUE) %>% 
+  select(img_id, filename, description, descr_original, score) %>% 
+  mutate(model_category = model_name,
+         score_category = "language") %>% 
+  mutate(unique_metric_id = paste(filename))
+}
+
+# reading in all data augmentation files from the best performing models (as determined in gold_metric_analysis.Rmd)
+df_blip_embed <-
+  list.files(path = "../metric_outputs/blip_embed/blip2_feature_extractor_pretrain/", pattern = "*.csv") %>% 
+  map_df(~import_all_augm_files(paste("../metric_outputs/blip_embed/blip2_feature_extractor_pretrain/", ., sep=""))) %>% 
+  clean_embed_data(., "BLIP-2")
+
+df_blip_instruct_lang <-
+  list.files(path = "../metric_outputs/blip_language/blip2_t5_instruct_flant5xxl/", pattern = "*.csv") %>% 
+  map_df(~import_all_augm_files(paste("../metric_outputs/blip_language/blip2_t5_instruct_flant5xxl/", ., sep=""))) %>% 
+  clean_logl_data(., "InstructBLIP")
+
+df_blip_lang <-
+  list.files(path = "../metric_outputs/blip_language/Salesforce_blip2flant5xxl_None/", pattern = "*.csv") %>% 
+  map_df(~import_all_augm_files(paste("../metric_outputs/blip_language/Salesforce_blip2flant5xxl_None/", ., sep=""))) %>% 
+  clean_logl_data(., "BLIP-2")
+
+df_clip_orig <-
+  list.files(path = "../metric_outputs/clip/ViTB32_openai/", pattern = "*.csv") %>% 
+  map_df(~import_all_augm_files(paste("../metric_outputs/clip/ViTB32_openai/", ., sep=""))) %>% 
+  clean_embed_data(., "Orig. CLIPScore")
+
+df_clip <-
+  list.files(path = "../metric_outputs/clip/ViTB16plus240_laion400m_e32/", pattern = "*.csv") %>% 
+  map_df(~import_all_augm_files(paste("../metric_outputs/clip/ViTB16plus240_laion400m_e32/", ., sep=""))) %>% 
+  clean_embed_data(., "CLIP")
+
+df_flamingo_lang <-
+  list.files(path = "../metric_outputs/flamingo_language/openflamingo_OpenFlamingo9Bvitlmpt7b_anasawadalla_mpt7b/", pattern = "*.csv") %>%
+  map_df(~import_all_augm_files(paste("../metric_outputs/flamingo_language/openflamingo_OpenFlamingo9Bvitlmpt7b_anasawadalla_mpt7b/", ., sep=""))) %>%
+  clean_logl_data(., "Flamingo")
+
+df_frozen_lang <-
+  list.files(path = "../metric_outputs/frozen_language/EVA02E14plus_laion2b_s9b_b144k_gpt2large/", pattern = "*.csv") %>% 
+  map_df(~import_all_augm_files(paste("../metric_outputs/frozen_language/EVA02E14plus_laion2b_s9b_b144k_gpt2large/", ., sep=""))) %>% 
+  clean_logl_data(., "Frozen")
+
+# loading human ratings
+df_human_avg = read_csv("../dataset/data/model_input_data/df_metric_gold.csv") %>%
+  gather(metric_name, human, starts_with("q_")) %>% 
+  filter(metric_name == "q_overall.postimg") %>% 
+  group_by(img_id, metric_name) %>% 
+  summarize(human = mean(human)) %>% 
+  ungroup()
+
+# cleaning data frame
+df_full = df_blip_embed %>% 
+  rbind(df_blip_instruct_lang) %>% 
+  rbind(df_blip_lang) %>% 
+  rbind(df_clip) %>% 
+  rbind(df_clip_orig) %>% 
+  rbind(df_flamingo_lang) %>% 
+  rbind(df_frozen_lang) %>% 
+  mutate(img_id = str_replace(img_id, "\\_.*\\.png", ".jpg")) %>% 
+  left_join(df_human_avg) %>% 
+  mutate(nice_category_name = case_when(
+    str_detect(model_category, "CLIPScore") ~ "Orig. CLIPScore (Sim)",
+    str_detect(score_category, "embed") ~ paste(model_category, "(Sim)", sep=" "),
+    str_detect(score_category, "language") ~ paste(model_category, "(LogL)", sep=" "),
+    TRUE ~ model_category
+  )) %>%
+  mutate(nice_category_name = fct_relevel(nice_category_name, 
+    "Orig. CLIPScore (Sim)", "CLIP (Sim)", "BLIP-2 (Sim)", 
+    "InstructBLIP (LogL)", "Flamingo (LogL)", "Frozen (LogL)", "BLIP-2 (LogL)")) %>%  
+  rename(source_filename = filename) %>% 
+  mutate(filename = nice_category_name)
+```
+
+
+# Proportion of augmented descriptions that receive lower/higher/the same scores (Figure 3)
+
+```{r}
+# separating out performance on gold/ground-truth data
+df_gold = df_full %>% 
+  distinct(source_filename, score, filename, img_id) %>%
+  filter(source_filename == "df_metric_gold.csv") %>% 
+  rename(gold = score) %>% 
+  select(-source_filename)
+
+# comparing performance of metrics on augmented data to gold data
+df_worse_perc = df_full %>% 
+  mutate(no_change = description == descr_original) %>%
+  distinct(source_filename, img_id, score, filename, model_category, no_change) %>%
+  filter(source_filename != "df_metric_gold.csv") %>% 
+  left_join(df_gold) %>%
+  filter(!is.na(gold), 
+         ifelse(str_detect(source_filename, "context|frankenstein|gold"), TRUE, !no_change)) %>% 
+  mutate(worse_score = case_when(
+    score < gold ~ 1,
+    score > gold ~ -1,
+    TRUE ~ 0
+  ))
+
+# improving data formatting
+df_aug_plot = df_worse_perc %>% 
+    mutate(gold = round(gold, digits = 3)) %>% 
+    mutate(score = round(score, digits = 3)) %>% 
+      mutate(worse_score = case_when(
+        score < gold ~ "worse",
+        score > gold ~ "better",
+        TRUE ~ "unchanged"
+      )) %>% 
+      mutate(source_filename = case_when(
+    # str_detect(source_filename, "gold") ~ "ground truth",
+    str_detect(source_filename, "wordshuffling") ~ "shuffled words",
+    str_detect(source_filename, "frankenstein") ~ "frankenstein images",
+    str_detect(source_filename, "continuation_long") ~ "GPT-2 cont. long",
+    str_detect(source_filename, "continuation_short") ~ "GPT-2 cont. short",
+    str_detect(source_filename, "irrfinalsentence") ~ "irrelev. final sentence",
+    str_detect(source_filename, "modelerrors") ~ "freq. alignm. errors",
+    str_detect(source_filename, "propernames") ~ "prop. name replacem.",
+    str_detect(source_filename, "repeatedsentence") ~ "exact repetition",
+    str_detect(source_filename, "context") ~ "shuffled contexts",
+    str_detect(source_filename, "shuffleddescr") ~ "shuffled descriptions",
+    TRUE ~ "UNKNOWN"
+  )) %>%
+  mutate(source_filename = fct_relevel(source_filename, 
+    # "ground truth",
+    "shuffled descriptions","shuffled contexts", 
+    "shuffled words", 
+    "prop. name replacem.", "freq. alignm. errors", "frankenstein images", 
+    "GPT-2 cont. short", "GPT-2 cont. long", "irrelev. final sentence", "exact repetition")) 
+  
+# plotting
+df_aug_plot %>%
+  mutate(emblogl = str_detect(filename, "Sim")) %>% 
+  group_by(filename, emblogl, source_filename) %>% 
+  mutate(total_n = n()) %>% 
+  ungroup() %>% 
+  group_by(filename, emblogl, worse_score, source_filename, total_n) %>% 
+  summarize(prop = n()) %>% 
+  ungroup() %>% 
+  mutate(perc = prop / total_n) %>% 
+  ggplot(., aes(x=filename, y=perc, fill=worse_score, color=emblogl)) +
+    facet_wrap(~source_filename, nrow=2) +
+    geom_bar(stat="identity",
+             width=0.65) +
+    scale_fill_manual(values = c("#d01c8b", "#f1b6da", "#4dac26"), name = "Score of augmented data is", labels = c("higher (incorrect)", "unchanged (incorrect)","lower (correct)")) +
+    scale_color_manual(values = c("black", "lightgray"), guide = 'none') +
+    theme(axis.text.x = element_text(angle=60, hjust=1)) +
+    xlab("Metric Variant") +
+    ylab("Proportion of Descriptions") +
+    theme(strip.background = element_blank()) +
+    theme(legend.position = "top",
+          legend.box.margin=margin(0,0,-12,0))
+
+
+# ggsave("aug_proportions_bestmodel_byaug.png", width= 7, height=5)
+```
+
+# Average scores for all data augmentations compared to gold/ground-truth data (Figure A.6)
+
+```{r}
+
+# separating out performance of metrics on gold/ground-truth data and computing means and standard deviations
+df_gold_comp = df_full %>% 
+  distinct(source_filename, img_id, score, model_category, nice_category_name) %>%
+  filter(source_filename == "df_metric_gold.csv") %>% 
+  group_by(model_category, nice_category_name) %>%
+  mutate(goldmean = mean(score),
+         goldsd = sd(score),
+         goldsd_top = goldmean+(goldsd/4),
+         goldsd_bottom = goldmean-(goldsd/4)) %>% 
+  ungroup() %>% 
+  select(-source_filename, -score)
+
+# plotting changed average rating for all metrics from ground-truth data to augmented data
+df_full %>% 
+  mutate(no_change = description == descr_original) %>%
+  distinct(source_filename, img_id, score, model_category, nice_category_name,no_change) %>% 
+  group_by(source_filename, nice_category_name, no_change) %>%
+  mutate(meanofmeans = mean(score),
+         sdofmeans = sd(score),
+         sd_top = meanofmeans+(sdofmeans/4),
+         sd_bottom = meanofmeans-(sdofmeans/4)) %>%
+  ungroup() %>% 
+  left_join(df_gold_comp) %>%
+  filter(ifelse(str_detect(source_filename, "context|frankenstein|gold"), TRUE, !no_change)) %>% 
+  mutate(color_coding = case_when(
+    source_filename == "df_metric_gold.csv" ~ "1 black",
+    meanofmeans > goldsd_top ~ "2 higher",
+    meanofmeans < goldsd_bottom ~ "4 lower",
+    TRUE ~ "3 no change"
+  )) %>%
+    mutate(source_filename = case_when(
+    str_detect(source_filename, "gold") ~ "ground truth",
+    str_detect(source_filename, "wordshuffling") ~ "shuffled words",
+    str_detect(source_filename, "frankenstein") ~ "frankenstein images",
+    str_detect(source_filename, "continuation_long") ~ "GPT-2 cont. long",
+    str_detect(source_filename, "continuation_short") ~ "GPT-2 cont. short",
+    str_detect(source_filename, "irrfinalsentence") ~ "irrelev. final sentence",
+    str_detect(source_filename, "modelerrors") ~ "freq. alignm. errors",
+    str_detect(source_filename, "propernames") ~ "prop. name replacem.",
+    str_detect(source_filename, "repeatedsentence") ~ "exact repetition",
+    str_detect(source_filename, "context") ~ "shuffled contexts",
+    str_detect(source_filename, "shuffleddescr") ~ "shuffled descriptions",
+    TRUE ~ "UNKNOWN"
+  )) %>%
+  # add filler facet for nicer plotting (edited out for final paper version)
+  add_row(nice_category_name = "filler", score = 2, source_filename = "ground truth", color_coding = "4 lower") %>% 
+  add_row(nice_category_name = "filler", score = 3, source_filename = "ground truth", color_coding = "4 lower") %>% 
+  add_row(nice_category_name = "filler", score = 5, source_filename = "ground truth", color_coding = "4 lower") %>%
+  mutate(source_filename = fct_relevel(source_filename, 
+    "shuffled descriptions","shuffled contexts", 
+    "shuffled words", 
+    "prop. name replacem.", "freq. alignm. errors", "frankenstein images", 
+    "GPT-2 cont. short", "GPT-2 cont. long", "irrelev. final sentence", "exact repetition")) %>% 
+  mutate(nice_category_name = fct_relevel(nice_category_name, "Orig. CLIPScore (Sim)", "CLIP (Sim)", "BLIP-2 (Sim)", "filler", "InstructBLIP (LogL)", "Flamingo (LogL)", "Frozen (LogL)", "BLIP-2 (LogL)")) %>% 
+      ggplot(., aes(x=source_filename, y=score, color=color_coding)) +
+        facet_wrap(~nice_category_name, scales = "free_y", ncol=4) +
+        stat_summary(fun = "mean",
+                     size = 3,
+                     geom = "point",
+                     position = position_dodge(0.3)) +
+        stat_summary(fun.data = "mean_cl_boot",
+                     geom = "errorbar",
+                     size = .3,
+                     width = 0.2,
+                     position = position_dodge(0.3)) +
+        theme(axis.text.x = element_text(angle=55, hjust=1)) +
+        scale_color_manual(values = c("black", "#d01c8b", "#f1b6da", "#4dac26"), name = "Avg score"
+                           , labels = c("ground truth", "higher (incorrect)", "unchanged (incorrect)","lower (correct)")
+                           ) +
+        theme(legend.position = "top") +
+        xlab("Augmentation") +
+        ylab("Average Score") +
+        theme(strip.background = element_blank())
+
+# ggsave("aug_avgscore_bestmodel.png", width=7, height=5.2)
+
+```
